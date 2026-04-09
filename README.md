@@ -101,6 +101,72 @@ const commitment = await committer.commit(intent, {
 // commitment.proof → solver (selective disclosure)
 ```
 
+## MCP Server (Claude Desktop)
+
+This package includes an MCP server with 5 tools for Claude Desktop / Claude Code integration.
+
+### Tools
+
+| Tool | Description |
+|------|-------------|
+| `create_intent` | Create a HashLockIntent via builder parameters |
+| `validate_intent` | Validate an intent against schema + business rules |
+| `parse_natural_language` | Parse Turkish/English text into an intent |
+| `commit_intent` | Create off-chain commitment with selective disclosure |
+| `explain_intent` | Generate human-readable intent explanation |
+
+### Setup (Claude Desktop)
+
+```jsonc
+// claude_desktop_config.json
+{
+  "mcpServers": {
+    "hashlock-intent": {
+      "command": "npx",
+      "args": ["-y", "@hashlock/intent-schema"]
+    }
+  }
+}
+```
+
+Or if installed globally:
+
+```jsonc
+{
+  "mcpServers": {
+    "hashlock-intent": {
+      "command": "hashlock-intent"
+    }
+  }
+}
+```
+
+### Setup (Claude Code)
+
+```jsonc
+// .claude/settings.json
+{
+  "mcpServers": {
+    "hashlock-intent": {
+      "command": "npx",
+      "args": ["-y", "@hashlock/intent-schema"]
+    }
+  }
+}
+```
+
+### Local Development
+
+```bash
+git clone https://github.com/Hashlock-Tech/hashlock-intent-schema
+cd hashlock-intent-schema
+npm install && npm run build
+
+# Claude Desktop — point to local build:
+# "command": "node",
+# "args": ["path/to/hashlock-intent-schema/dist/mcp/server.js"]
+```
+
 ## Validation Rules
 
 The `IntentValidator` checks:
