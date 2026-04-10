@@ -1,5 +1,5 @@
 {
-  "name": "@hashlock/intent-schema",
+  "name": "@hashlock-tech/intent-schema",
   "version": "1.0.0",
   "description": "Walrasian intent standard for HashLock — dynamic preference functions for intent-based clearing",
   "type": "module",

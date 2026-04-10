@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { GiveSchema, ReceiveSchema } from "./conditions.js";
 import { SolverDirectiveSchema } from "./solver.js";
+import {
+  PrincipalAttestationSchema,
+  AgentInstanceSchema,
+  KycTier,
+} from "./principal.js";
 
 // ── Asset Types ──────────────────────────────────────────────
 
@@ -52,7 +57,11 @@ export const ConditionsSchema = z.object({
   maxSlippage: z.number().min(0).max(1).optional(),
   partialFill: z.boolean().optional(),
   counterparty: z.array(z.string()).optional(),
+  // Deprecated: prefer minCounterpartyTier (objective KYC-based filter)
   minCounterpartyReputation: z.number().min(0).optional(),
+  // Minimum KYC tier the counterparty must attest to. Filter for
+  // institutional flows that require compliance-gated peers.
+  minCounterpartyTier: KycTier.optional(),
 });
 
 export type Conditions = z.infer<typeof ConditionsSchema>;
@@ -87,6 +96,14 @@ export const HashLockIntentSchema = z.object({
 
   // Signature
   signature: SignatureSchema.optional(),
+
+  // Principal attestation (optional, for agent/institution flows)
+  // Humans using session-level JWT auth may omit this.
+  attestation: PrincipalAttestationSchema.optional(),
+
+  // Agent instance metadata (optional, for autonomous agents)
+  // Must be accompanied by `attestation` when present.
+  agentInstance: AgentInstanceSchema.optional(),
 });
 
 export type HashLockIntent = z.infer<typeof HashLockIntentSchema>;

@@ -8,6 +8,8 @@ export type {
   Give,
   Receive,
   SolverDirective,
+  PrincipalAttestation,
+  AgentInstance,
 } from "./types/index.js";
 
 export {
@@ -19,6 +21,8 @@ export {
   GiveSchema,
   ReceiveSchema,
   SolverDirectiveSchema,
+  PrincipalAttestationSchema,
+  AgentInstanceSchema,
   AssetType,
   SettlementType,
   AtomicityType,
@@ -26,6 +30,10 @@ export {
   SignatureMethod,
   SolverAccessType,
   SolverStrategy,
+  KycTier,
+  KYC_TIER_RANK,
+  meetsKycTier,
+  PrincipalType,
   SUPPORTED_CHAINS,
   isSupportedChain,
 } from "./types/index.js";

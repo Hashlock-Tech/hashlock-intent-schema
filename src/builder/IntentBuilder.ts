@@ -5,7 +5,10 @@ import type {
   Give,
   Receive,
   Trigger,
+  PrincipalAttestation,
+  AgentInstance,
 } from "../types/index.js";
+import type { KycTier } from "../types/principal.js";
 
 // ── Builder input types (user-friendly, amounts as ETH not wei) ──
 
@@ -43,6 +46,9 @@ export class IntentBuilder {
   private _ringParties?: string[];
   private _atomicity: "full" | "partial" = "full";
   private _trigger?: Trigger;
+  private _minCounterpartyTier?: KycTier;
+  private _attestation?: PrincipalAttestation;
+  private _agentInstance?: AgentInstance;
 
   /** Set what you're giving */
   give(input: GiveInput): this {
@@ -148,6 +154,24 @@ export class IntentBuilder {
     return this;
   }
 
+  /** Minimum KYC tier the counterparty must attest to */
+  minCounterpartyTier(tier: KycTier): this {
+    this._minCounterpartyTier = tier;
+    return this;
+  }
+
+  /** Principal attestation (agent or institutional flows) */
+  attestation(a: PrincipalAttestation): this {
+    this._attestation = a;
+    return this;
+  }
+
+  /** Agent instance metadata (must be paired with attestation) */
+  agentInstance(i: AgentInstance): this {
+    this._agentInstance = i;
+    return this;
+  }
+
   /** Build and validate the intent */
   build(): HashLockIntent {
     if (!this._give) throw new Error("give() is required");
@@ -169,6 +193,7 @@ export class IntentBuilder {
         maxSlippage: this._maxSlippage,
         partialFill: this._partialFill,
         counterparty: this._counterparty,
+        minCounterpartyTier: this._minCounterpartyTier,
       },
 
       solver: {
@@ -185,6 +210,9 @@ export class IntentBuilder {
       },
 
       trigger: this._trigger,
+
+      attestation: this._attestation,
+      agentInstance: this._agentInstance,
     };
 
     // Validate through Zod — throws on invalid

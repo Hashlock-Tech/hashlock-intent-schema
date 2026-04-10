@@ -52,6 +52,26 @@ server.tool(
     triggerDescription: z.string().optional().describe("Human-readable trigger condition"),
     triggerAgentId: z.string().optional().describe("Producing agent ID"),
     triggerConfidence: z.number().min(0).max(1).optional().describe("Agent confidence score"),
+    // Counterparty compliance filter
+    minCounterpartyTier: z
+      .enum(["NONE", "BASIC", "STANDARD", "ENHANCED", "INSTITUTIONAL"])
+      .optional()
+      .describe("Minimum KYC tier the counterparty must attest to"),
+    // Principal attestation (for agent/institution flows)
+    attestationPrincipalId: z.string().optional().describe("Principal ID hash (attestation)"),
+    attestationPrincipalType: z.enum(["HUMAN", "INSTITUTION", "AGENT"]).optional().describe("Principal type"),
+    attestationTier: z
+      .enum(["NONE", "BASIC", "STANDARD", "ENHANCED", "INSTITUTIONAL"])
+      .optional()
+      .describe("Signer's attested KYC tier"),
+    attestationBlindId: z.string().optional().describe("Rotating pseudonym the counterparty sees"),
+    attestationIssuedAt: z.number().int().positive().optional().describe("Attestation issuedAt (unix seconds)"),
+    attestationExpiresAt: z.number().int().positive().optional().describe("Attestation expiry (unix seconds)"),
+    attestationProof: z.string().optional().describe("Opaque attestation proof (signature/ZK) verified by gateway"),
+    // Agent instance metadata
+    agentInstanceId: z.string().optional().describe("Agent instance ID (must pair with attestation)"),
+    agentInstanceStrategy: z.string().optional().describe("Strategy label (e.g. 'mm-eth-usdc')"),
+    agentInstanceVersion: z.string().optional().describe("Agent software version"),
   },
   async (params) => {
     try {
@@ -85,6 +105,37 @@ server.tool(
           description: params.triggerDescription,
           agentId: params.triggerAgentId,
           confidence: params.triggerConfidence,
+        });
+      }
+
+      if (params.minCounterpartyTier) {
+        builder.minCounterpartyTier(params.minCounterpartyTier);
+      }
+
+      if (
+        params.attestationPrincipalId &&
+        params.attestationPrincipalType &&
+        params.attestationTier &&
+        params.attestationIssuedAt &&
+        params.attestationExpiresAt &&
+        params.attestationProof
+      ) {
+        builder.attestation({
+          principalId: params.attestationPrincipalId,
+          principalType: params.attestationPrincipalType,
+          tier: params.attestationTier,
+          blindId: params.attestationBlindId,
+          issuedAt: params.attestationIssuedAt,
+          expiresAt: params.attestationExpiresAt,
+          proof: params.attestationProof,
+        });
+      }
+
+      if (params.agentInstanceId) {
+        builder.agentInstance({
+          instanceId: params.agentInstanceId,
+          strategy: params.agentInstanceStrategy,
+          version: params.agentInstanceVersion,
         });
       }
 
@@ -184,12 +235,14 @@ server.tool(
 
 server.tool(
   "commit_intent",
-  "Create an off-chain commitment from an intent. Returns commitment hash and solver proof with selective disclosure.",
+  "Create an off-chain commitment from an intent. Returns commitment hash and solver proof with selective disclosure. " +
+    "Use hideAmounts + hideCounterparty + hideIdentity + revealOnMatch=false for a sealed-bid commit in a blind auction.",
   {
     intent: z.string().describe("Intent JSON string to commit"),
     hideAmounts: z.boolean().default(false).describe("Hide amounts from solver proof"),
-    hideCounterparty: z.boolean().default(false).describe("Hide counterparty from solver proof"),
-    revealOnMatch: z.boolean().default(true).describe("Reveal full intent when matched"),
+    hideCounterparty: z.boolean().default(false).describe("Hide counterparty list from solver proof"),
+    hideIdentity: z.boolean().default(false).describe("Strip principal blindId from solver proof (tier still visible)"),
+    revealOnMatch: z.boolean().default(true).describe("Reveal full intent when matched (set false for full sealed bid)"),
   },
   async (params) => {
     try {
@@ -198,6 +251,7 @@ server.tool(
       const commitment = await committer.commit(intent, {
         hideAmounts: params.hideAmounts,
         hideCounterparty: params.hideCounterparty,
+        hideIdentity: params.hideIdentity,
         revealOnMatch: params.revealOnMatch,
       });
 

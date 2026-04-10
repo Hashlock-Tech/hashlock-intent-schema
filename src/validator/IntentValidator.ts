@@ -1,6 +1,7 @@
 import { ZodError } from "zod";
 import { HashLockIntentSchema } from "../types/intent.js";
 import { isSupportedChain } from "../types/conditions.js";
+import { meetsKycTier } from "../types/principal.js";
 import type { HashLockIntent } from "../types/index.js";
 
 // ── Validation Result ────────────────────────────────────────
@@ -49,6 +50,9 @@ export class IntentValidator {
     this.checkSettlement(i, errors);
     this.checkSlippage(i, warnings);
     this.checkTokenAddress(i, warnings);
+    this.checkAttestation(i, errors, warnings);
+    this.checkAgentInstance(i, errors);
+    this.checkTierCoherence(i, errors);
 
     return {
       valid: errors.length === 0,
@@ -139,6 +143,62 @@ export class IntentValidator {
     if (i.receive.asset !== "ETH" && !i.receive.token) {
       warnings.push(
         "receive.asset is ERC20/ERC721 but no token address provided"
+      );
+    }
+  }
+
+  private checkAttestation(
+    i: HashLockIntent,
+    errors: string[],
+    warnings: string[]
+  ): void {
+    if (!i.attestation) return;
+
+    const now = Math.floor(Date.now() / 1000);
+    if (i.attestation.expiresAt <= now) {
+      errors.push("attestation has expired");
+    } else if (i.attestation.expiresAt - now < 300) {
+      warnings.push("attestation expires in less than 5 minutes");
+    }
+
+    if (i.attestation.issuedAt > now + 60) {
+      errors.push("attestation issuedAt is in the future");
+    }
+
+    if (i.attestation.issuedAt >= i.attestation.expiresAt) {
+      errors.push("attestation issuedAt must be before expiresAt");
+    }
+  }
+
+  private checkAgentInstance(i: HashLockIntent, errors: string[]): void {
+    if (i.agentInstance && !i.attestation) {
+      errors.push(
+        "agentInstance requires attestation — an agent instance must be bound to a principal"
+      );
+    }
+
+    if (
+      i.agentInstance &&
+      i.attestation &&
+      i.attestation.principalType !== "AGENT" &&
+      i.attestation.principalType !== "INSTITUTION"
+    ) {
+      errors.push(
+        "agentInstance requires attestation.principalType to be AGENT or INSTITUTION"
+      );
+    }
+  }
+
+  private checkTierCoherence(i: HashLockIntent, errors: string[]): void {
+    const required = i.conditions.minCounterpartyTier;
+    if (!required) return;
+
+    // If the signer itself has an attestation, warn if it's below the
+    // tier it demands from its counterparty (asymmetric compliance
+    // is usually an operator mistake).
+    if (i.attestation && !meetsKycTier(i.attestation.tier, required)) {
+      errors.push(
+        `attestation.tier (${i.attestation.tier}) is below minCounterpartyTier (${required}) — asymmetric tier requirements are rejected`
       );
     }
   }

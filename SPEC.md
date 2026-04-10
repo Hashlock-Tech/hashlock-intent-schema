@@ -2,11 +2,18 @@
 
 **Version**: 1.0
 **Status**: Draft
-**Date**: 2026-04-10
+**Date**: 2026-04-11
 
 ## 1. Overview
 
-The HashLock Intent Schema defines a standard format for expressing trading preferences as **conditional preference functions** rather than static orders. Intents are produced by AI agents, consumed by solvers, and settled atomically via HashLock HTLC contracts.
+The HashLock Intent Schema defines the canonical object exchanged between producers (human traders, autonomous agents) and the HashLock matching/settlement stack.
+
+Two user classes coexist on the same venue:
+
+- **Humans** — traders on OTC desks, RFQ broadcast, and blind auctions. Authentication happens at the session level (JWT); no per-intent attestation is required. Existing human flows remain unchanged.
+- **Agents** — autonomous instances operating under a KYC'd principal (institution, fund, or individual). Authentication happens per-intent via a principal attestation. Multiple agent instances can share one KYC'd principal but each carries a unique blind identity.
+
+Both classes produce the same `HashLockIntent` object. The only structural difference is that agent intents carry optional `attestation` and `agentInstance` fields; human intents omit them.
 
 ## 2. Intent Structure
 
@@ -47,7 +54,8 @@ The HashLock Intent Schema defines a standard format for expressing trading pref
 | `maxSlippage` | float | No | Max slippage tolerance (0.005 = 0.5%) |
 | `partialFill` | boolean | No | Accept partial fills (default: false) |
 | `counterparty` | address[] | No | Whitelist of allowed counterparties |
-| `minCounterpartyReputation` | uint | No | Future: reputation score threshold |
+| `minCounterpartyReputation` | uint | No | **Deprecated** — subjective reputation score (kept for backward compatibility) |
+| `minCounterpartyTier` | KycTier | No | Minimum compliance tier the counterparty must attest to (NONE/BASIC/STANDARD/ENHANCED/INSTITUTIONAL) |
 
 ### 2.5 Solver Directives
 
@@ -84,6 +92,38 @@ The HashLock Intent Schema defines a standard format for expressing trading pref
 | `signer` | address | Yes | Signing address |
 | `sig` | string | Yes | Signature bytes |
 | `method` | `"eip712" \| "eip191"` | Yes | Signing method |
+
+### 2.9 Principal Attestation (Optional)
+
+Attestation binds an intent to a KYC'd entity without leaking the entity to the counterparty. Omitted entirely for session-authenticated human flows.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `principalId` | string | Yes | Opaque identifier (stable hash) of the KYC'd entity |
+| `principalType` | `"HUMAN" \| "INSTITUTION" \| "AGENT"` | Yes | Kind of principal backing the intent |
+| `tier` | KycTier | Yes | Attested compliance tier of the principal |
+| `blindId` | string | No | Rotating pseudonym visible to counterparty (omit for post-match attribution only) |
+| `issuedAt` | uint64 | Yes | Attestation issuance time (unix seconds) |
+| `expiresAt` | uint64 | Yes | Attestation expiration (unix seconds) |
+| `proof` | string | Yes | Opaque proof (signature or ZK proof) verified by the HashLock gateway, NOT by the counterparty |
+
+**Tier ordering** (ascending): `NONE < BASIC < STANDARD < ENHANCED < INSTITUTIONAL`.
+
+**Invariants**:
+- `issuedAt < expiresAt`
+- Validation rejects attestations where `expiresAt <= now` or `issuedAt > now + 60s`
+- If `attestation.tier < conditions.minCounterpartyTier`, the intent is rejected as asymmetric
+
+### 2.10 Agent Instance (Optional)
+
+Informational metadata about the specific agent instance producing the intent. Never required; when present, it must be paired with an `attestation` whose `principalType` is `AGENT` or `INSTITUTION`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `instanceId` | string | Yes | Stable identifier for the agent instance |
+| `strategy` | string | No | Human-readable strategy label (e.g. `"mm-eth-usdc"`) |
+| `version` | string | No | Agent software version |
+| `spawnedAt` | uint64 | No | Instance spawn time (unix seconds) |
 
 ## 3. Lifecycle
 
@@ -129,11 +169,23 @@ Solver matches intents and executes via HashLock:
 
 ## 4. Hashing
 
-Current: SHA-256 of canonical JSON (sorted keys, signature excluded).
+Canonical hash: SHA-256 of deterministically serialized JSON. The canonicalizer recursively sorts object keys, drops `undefined` values, and uses standard JSON scalars.
 
 ```
-hash = "0x" + SHA256(JSON.stringify(intentWithoutSig, sortedKeys))
+hash = "0x" + SHA256(canonicalJson(intentWithoutAuthSecrets))
 ```
+
+**Excluded from the canonical form** (authentication envelopes, not intent content):
+- `signature` (the entire field)
+- `attestation.proof` (replaced with empty string before hashing)
+
+**Included in the canonical form** (content — substitution attacks must be detected):
+- All give/receive/conditions/solver/settlement fields
+- `attestation.principalId`, `attestation.principalType`, `attestation.tier`, `attestation.blindId`, `attestation.issuedAt`, `attestation.expiresAt`
+- `agentInstance` fields
+- `trigger` fields
+
+This guarantees that an attacker cannot swap a STANDARD-tier attestation for an INSTITUTIONAL-tier one without invalidating the commitment hash.
 
 Future: Poseidon hash for ZK-circuit compatibility.
 
@@ -155,10 +207,72 @@ Future: Poseidon hash for ZK-circuit compatibility.
 
 Schema version is locked to `"1.0"` in this release. Breaking changes will increment the major version. Non-breaking additions (new optional fields) will increment the minor version.
 
-## 7. Security Considerations
+## 7. Selective Disclosure
+
+The `IntentCommitter` produces a `Commitment` with two parts:
+
+- `hash` — the canonical SHA-256, safe to publish on-chain.
+- `proof` — a `SolverProof` object for the matching engine, where each sensitive field can be independently hidden via `CommitOptions`.
+
+### 7.1 CommitOptions
+
+| Option | Default | Effect on solver proof |
+|---|---|---|
+| `hideAmounts` | `false` | `giveAmount` and `receiveMinAmount` set to `null` |
+| `hideCounterparty` | `false` | `settlement.ringParties` set to `undefined` |
+| `hideIdentity` | `false` | `attestationBlindId` set to `null`; `attestationTier` remains visible so the solver can still enforce tier filters |
+| `revealOnMatch` | `true` | When `false`, the committer expects a reveal phase before settlement |
+
+### 7.2 What the solver always sees
+
+Regardless of flags, the solver proof contains:
+- `intentId`, `commitmentHash`
+- `giveAsset`, `giveChain`, `receiveAsset`, `receiveChain`
+- `solver` directives
+- `settlement.type` and `settlement.atomicity`
+- `deadline`
+- `minCounterpartyTier` (if set on the intent)
+- `attestationTier` (if an attestation is present)
+
+### 7.3 What the solver never sees
+
+- `attestation.principalId`
+- `attestation.proof`
+- The full intent before the reveal phase (when `revealOnMatch: false`)
+
+### 7.4 Sealed-bid blind auction configuration
+
+For a full sealed bid:
+
+```
+hideAmounts: true
+hideCounterparty: true
+hideIdentity: true
+revealOnMatch: false
+```
+
+In this mode the solver sees only tier filters and cross-chain topology. No amounts, no identities, no ring membership. Matching runs on tier and topology alone; once the auction clears, the winning bidders reveal their full intents for HTLC execution.
+
+## 8. Security Considerations
 
 - **Replay protection**: Each intent has a unique `nonce`. Solvers must check nonce uniqueness.
 - **Deadline enforcement**: Intents with expired deadlines must be rejected.
 - **Signature verification**: If `signature` is present, it must be valid for the signer address.
 - **Amount validation**: All amounts must be positive and non-zero.
-- **Commitment privacy**: On-chain commitment reveals only the hash; solver proof selectively discloses fields based on `CommitOptions`.
+- **Commitment privacy**: On-chain commitment reveals only the canonical hash; the solver proof selectively discloses fields based on `CommitOptions`.
+- **Attestation expiry**: Validators MUST reject expired attestations and MUST warn when expiration is less than 5 minutes away.
+- **Principal leakage**: The `attestation.principalId` and `attestation.proof` fields MUST NEVER be included in the solver proof or in any channel visible to counterparties. Only the gateway verifying the attestation should see them.
+- **Tier substitution attacks**: Because `attestation.tier` is included in the canonical hash, an attacker cannot upgrade or downgrade the declared tier without producing a different commitment hash.
+- **Asymmetric filter enforcement**: The validator rejects intents whose signer tier is below the tier they demand from their counterparty — this prevents operator misconfiguration where a STANDARD-tier agent filters for ENHANCED counterparties.
+- **Identity leakage in ring settlement**: Ring settlement contracts publish participant addresses on-chain. True blind ring settlement requires ZK-proofs over ring state (future work). For full privacy today, use bilateral settlement with `hideIdentity: true`.
+
+## 9. Coexistence with Human Flows
+
+Every field introduced to support agent/institution flows is **optional and additive**. Human OTC, RFQ, and blind auction workflows:
+
+- MAY omit `attestation` entirely — session-level JWT authentication carries the identity.
+- MAY use the original `conditions.counterparty` whitelist for manual compliance.
+- MAY use the existing `hideAmounts` and `hideCounterparty` flags without setting `hideIdentity`.
+- SHOULD treat `minCounterpartyTier` as opt-in when the trader wants compliance-gated matching.
+
+The canonical hash function is deterministic for both user classes: intents without `attestation` produce the same hash they would have under the previous specification, modulo the canonicalization fix described in section 4.

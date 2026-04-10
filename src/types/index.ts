@@ -32,3 +32,16 @@ export {
   SolverStrategy,
 } from "./solver.js";
 export type { SolverDirective } from "./solver.js";
+
+export {
+  KycTier,
+  KYC_TIER_RANK,
+  meetsKycTier,
+  PrincipalType,
+  PrincipalAttestationSchema,
+  AgentInstanceSchema,
+} from "./principal.js";
+export type {
+  PrincipalAttestation,
+  AgentInstance,
+} from "./principal.js";
